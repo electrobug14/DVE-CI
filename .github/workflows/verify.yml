@@ -28,10 +28,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             iverilog \
-            gtkwave xvfb xauth \
             yosys \
             graphviz \
-            jq bc python3-pip
+            python3-pip
+          pip3 install matplotlib --quiet
           curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
           sudo apt-get install -y nodejs
           sudo npm install -g netlistsvg
@@ -90,7 +90,7 @@ jobs:
           echo "sim_ok=$([ $SIM_STATUS -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       # ─────────────────────────────────────────
-      # 5. WAVEFORM EXPORT (GTKWave → PNG)
+      # 5. WAVEFORM (Python matplotlib — no GTKWave needed)
       # ─────────────────────────────────────────
       - name: Export Waveform PNG
         id: waveform
@@ -98,22 +98,20 @@ jobs:
           cd ${{ steps.get_dir.outputs.workdir }}
 
           if [ ! -f dump.vcd ]; then
-            echo "⚠️  dump.vcd not found — skipping waveform export"
+            echo "⚠️  dump.vcd not found — skipping waveform"
             echo "ok=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Explicit screen size helps GTKWave render properly headless
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            gtkwave dump.vcd --script ../scripts/wave_export.tcl \
-            2>&1 | tee waveform_log.txt
+          python3 ../scripts/vcd_to_png.py \
+            --vcd dump.vcd \
+            --output waveform.png \
+            2>&1
 
           if [ -f waveform.png ]; then
             echo "✅ waveform.png generated ($(du -h waveform.png | cut -f1))"
             echo "ok=true" >> $GITHUB_OUTPUT
           else
-            echo "⚠️  GTKWave ran but waveform.png was not produced"
-            cat waveform_log.txt
             echo "ok=false" >> $GITHUB_OUTPUT
           fi
 
@@ -134,10 +132,8 @@ jobs:
             stat;
           " 2>&1 | tee yosys_log.txt
 
-          # Extract stat block for metrics parser
           awk '/=== design hierarchy ===/,0' yosys_log.txt > synth_stats.txt
 
-          # Gate diagram (separate call to avoid stat conflict)
           yosys -p "
             read_verilog -sv design.v;
             synth -top dut -flatten;
@@ -208,22 +204,40 @@ jobs:
             --output simulation_log.md
 
       # ─────────────────────────────────────────
-      # 11. COMMIT ALL RESULTS INTO REPO
-      #     Explicit paths (not **) so auto-commit
-      #     finds the actual generated files
+      # 11. COMMIT RESULTS — only stage files that exist
       # ─────────────────────────────────────────
       - name: Commit Results to Repository
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "🤖 auto: EDA results for ${{ steps.get_dir.outputs.workdir }}"
-          file_pattern: >-
-            ${{ steps.get_dir.outputs.workdir }}/simulation_log.md
-            ${{ steps.get_dir.outputs.workdir }}/waveform.png
-            ${{ steps.get_dir.outputs.workdir }}/schematic.svg
-            ${{ steps.get_dir.outputs.workdir }}/schematic_gates.svg
-            ${{ steps.get_dir.outputs.workdir }}/timing_report.txt
-            ${{ steps.get_dir.outputs.workdir }}/hardware_metrics.json
-            ${{ steps.get_dir.outputs.workdir }}/synth_netlist.v
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "HDL Ecosystem Bot"
+
+          WORKDIR="${{ steps.get_dir.outputs.workdir }}"
+
+          # Stage only files that were actually generated
+          for f in \
+            "$WORKDIR/simulation_log.md" \
+            "$WORKDIR/waveform.png" \
+            "$WORKDIR/schematic.svg" \
+            "$WORKDIR/schematic_gates.svg" \
+            "$WORKDIR/timing_report.txt" \
+            "$WORKDIR/hardware_metrics.json" \
+            "$WORKDIR/synth_netlist.v"
+          do
+            if [ -f "$f" ]; then
+              git add "$f"
+              echo "📎 Staged: $f"
+            else
+              echo "⏭️  Skipped (not found): $f"
+            fi
+          done
+
+          # Only commit if something was staged
+          if git diff --cached --quiet; then
+            echo "✅ Nothing new to commit."
+          else
+            git commit -m "🤖 auto: EDA results for $WORKDIR"
+            git push
+          fi
 
       # ─────────────────────────────────────────
       # 12. UPLOAD AS ACTIONS ARTIFACTS (backup)

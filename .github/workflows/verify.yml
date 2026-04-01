@@ -1,0 +1,230 @@
+name: HDL Ecosystem — Full EDA Pipeline
+
+# ─────────────────────────────────────────────
+# Triggers when any design.v is pushed
+# Does NOT re-trigger on auto-committed outputs
+# ─────────────────────────────────────────────
+on:
+  push:
+    paths:
+      - '**/design.v'
+
+jobs:
+  eda-pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    # ── Use our custom Docker image ──
+    # For GitHub Actions we install tools inline (avoids Docker Hub rate limits)
+    # If you push to GHCR later, replace this with: container: ghcr.io/<you>/hdl-env:latest
+
+    steps:
+      # ─────────────────────────────────────────
+      # 1. CHECKOUT
+      # ─────────────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # ─────────────────────────────────────────
+      # 2. TOOL INSTALLATION (mirrors Dockerfile)
+      # ─────────────────────────────────────────
+      - name: Install EDA Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            iverilog \
+            gtkwave xvfb xauth \
+            yosys \
+            graphviz \
+            jq bc
+          # Node + netlistsvg for schematic SVG
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          sudo npm install -g netlistsvg
+
+      # ─────────────────────────────────────────
+      # 3. IDENTIFY WHICH FOLDER CHANGED
+      # ─────────────────────────────────────────
+      - name: Identify Changed Design Folder
+        id: get_dir
+        run: |
+          DIR=$(git diff --name-only HEAD^ HEAD \
+            | grep 'design\.v$' \
+            | head -n 1 \
+            | xargs dirname)
+          echo "workdir=$DIR" >> $GITHUB_OUTPUT
+          echo "📁 Working directory: $DIR"
+
+      # ─────────────────────────────────────────
+      # 4. SIMULATION (Icarus Verilog + VCD dump)
+      # ─────────────────────────────────────────
+      - name: Run Simulation
+        id: simulation
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          echo "=== SIMULATION ===" 
+
+          # Compile
+          iverilog -g2012 \
+            -o sim.vvp \
+            design.v \
+            ../scripts/universal_tb.v \
+            2>&1 | tee compile_log.txt
+
+          COMPILE_STATUS=${PIPESTATUS[0]}
+
+          # Run
+          if [ $COMPILE_STATUS -eq 0 ]; then
+            vvp sim.vvp 2>&1 | tee sim_output.txt
+            SIM_STATUS=${PIPESTATUS[0]}
+          else
+            echo "Compilation failed." > sim_output.txt
+            SIM_STATUS=1
+          fi
+
+          echo "compile_ok=$([ $COMPILE_STATUS -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "sim_ok=$([ $SIM_STATUS -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────
+      # 5. WAVEFORM EXPORT (GTKWave → PNG)
+      # ─────────────────────────────────────────
+      - name: Export Waveform PNG
+        id: waveform
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          if [ -f dump.vcd ]; then
+            xvfb-run --auto-servernum \
+              gtkwave dump.vcd \
+              --script ../scripts/wave_export.tcl \
+              --dump dump.vcd \
+              2>&1 | tee waveform_log.txt
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  dump.vcd not found — skipping waveform export"
+            echo "ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ─────────────────────────────────────────
+      # 6. SYNTHESIS (Yosys)
+      # ─────────────────────────────────────────
+      - name: Run Synthesis
+        id: synthesis
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          echo "=== SYNTHESIS ==="
+
+          # Run Yosys: generic synth → JSON netlist for schematic
+          #            + stat for hardware metrics
+          yosys -p "
+            read_verilog -sv design.v;
+            synth -top dut -flatten;
+            opt;
+            stat -json > synth_stats.json;
+            write_json netlist.json;
+            write_verilog synth_netlist.v;
+            show -format dot -prefix schematic_raw;
+          " 2>&1 | tee yosys_log.txt
+
+          echo "ok=$([ -f netlist.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────
+      # 7. SCHEMATIC (netlistsvg → SVG)
+      # ─────────────────────────────────────────
+      - name: Generate Schematic SVG
+        id: schematic
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          if [ -f netlist.json ]; then
+            netlistsvg netlist.json -o schematic.svg 2>&1 | tee schematic_log.txt
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ok=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Also convert dot → svg as fallback (Yosys show output)
+          if [ -f schematic_raw.dot ]; then
+            dot -Tsvg schematic_raw.dot -o schematic_gates.svg
+          fi
+
+      # ─────────────────────────────────────────
+      # 8. HARDWARE METRICS (from Yosys stat)
+      # ─────────────────────────────────────────
+      - name: Extract Hardware Metrics
+        id: metrics
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          python3 ../scripts/parse_metrics.py \
+            --yosys-log yosys_log.txt \
+            --stat-json synth_stats.json \
+            --output hardware_metrics.json \
+            2>&1 | tee metrics_log.txt
+          echo "ok=$([ -f hardware_metrics.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────
+      # 9. TIMING ANALYSIS (OpenSTA, if available)
+      # ─────────────────────────────────────────
+      - name: Run Timing Analysis
+        id: timing
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          # OpenSTA may not be installed via apt; use Yosys timing estimation instead
+          if command -v sta &> /dev/null; then
+            sta -exit ../scripts/timing.tcl 2>&1 | tee timing_report.txt
+          else
+            # Fallback: estimate from Yosys critical path
+            python3 ../scripts/estimate_timing.py \
+              --netlist synth_netlist.v \
+              --output timing_report.txt \
+              2>&1
+          fi
+
+      # ─────────────────────────────────────────
+      # 10. BUILD SIMULATION REPORT (Markdown)
+      # ─────────────────────────────────────────
+      - name: Build Simulation Report
+        run: |
+          cd ${{ steps.get_dir.outputs.workdir }}
+          python3 ../scripts/build_report.py \
+            --project "${{ steps.get_dir.outputs.workdir }}" \
+            --sim-output sim_output.txt \
+            --compile-log compile_log.txt \
+            --metrics hardware_metrics.json \
+            --timing timing_report.txt \
+            --has-waveform "${{ steps.waveform.outputs.ok }}" \
+            --has-schematic "${{ steps.schematic.outputs.ok }}" \
+            --output simulation_log.md
+
+      # ─────────────────────────────────────────
+      # 11. UPLOAD ALL ARTIFACTS
+      # ─────────────────────────────────────────
+      - name: Upload Simulation Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdl-results-${{ steps.get_dir.outputs.workdir }}
+          path: |
+            ${{ steps.get_dir.outputs.workdir }}/simulation_log.md
+            ${{ steps.get_dir.outputs.workdir }}/waveform.png
+            ${{ steps.get_dir.outputs.workdir }}/schematic.svg
+            ${{ steps.get_dir.outputs.workdir }}/schematic_gates.svg
+            ${{ steps.get_dir.outputs.workdir }}/timing_report.txt
+            ${{ steps.get_dir.outputs.workdir }}/hardware_metrics.json
+            ${{ steps.get_dir.outputs.workdir }}/synth_netlist.v
+          retention-days: 30
+
+      # ─────────────────────────────────────────
+      # 12. AUTO-COMMIT RESULTS BACK TO REPO
+      # ─────────────────────────────────────────
+      - name: Commit Results to Repository
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 auto: EDA results for ${{ steps.get_dir.outputs.workdir }}"
+          file_pattern: |
+            **/simulation_log.md
+            **/waveform.png
+            **/schematic.svg
+            **/schematic_gates.svg
+            **/timing_report.txt
+            **/hardware_metrics.json

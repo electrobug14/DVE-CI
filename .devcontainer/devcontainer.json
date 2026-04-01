@@ -1,0 +1,38 @@
+{
+    "name": "HDL Verification Ecosystem",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "workspaceFolder": "/workspace",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "mshr-h.veriloghdl",
+                "leafle.gtkwave-viewer",
+                "ms-vscode.makefile-tools",
+                "redhat.vscode-yaml",
+                "GitHub.vscode-github-actions",
+                "hediet.vscode-drawio"
+            ],
+            "settings": {
+                "verilog.linting.linter": "iverilog",
+                "verilog.linting.iverilog.arguments": "-g2012",
+                "editor.formatOnSave": true,
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    },
+
+    "remoteEnv": {
+        "TIMING_LIB": "/opt/timing_libs/generic_timing.lib"
+    },
+
+    "postCreateCommand": "echo '✅ HDL Ecosystem ready. Tools: iverilog, yosys, gtkwave, netlistsvg, opensta'",
+
+    "mounts": [
+        "source=${localWorkspaceFolder}/scripts,target=/workspace/scripts,type=bind"
+    ]
+}

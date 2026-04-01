@@ -24,3 +24,4 @@ module dut (
     end
 
 endmodule
+"// retrigger" 

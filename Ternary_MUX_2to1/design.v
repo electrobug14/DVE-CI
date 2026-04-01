@@ -46,3 +46,4 @@ module dut (
     end
 
 endmodule
+// trigger

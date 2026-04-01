@@ -1,0 +1,13 @@
+{
+  "summary": {
+    "estimated_area_mm2": 0,
+    "estimated_area_um2": 0,
+    "estimated_transistors": 0,
+    "total_cells": 0,
+    "reference_node": "7nm CMOS (educational estimate)",
+    "transistor_density_note": "Actual silicon area depends on PDK & place-and-route"
+  },
+  "wire_count": 0,
+  "port_count": 0,
+  "cell_breakdown": []
+}

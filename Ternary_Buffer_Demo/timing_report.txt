@@ -1,0 +1,25 @@
+╔══════════════════════════════════════════════╗
+║       Timing Analysis Report (Estimated)     ║
+╚══════════════════════════════════════════════╝
+
+⚙ Reference Node  : Generic 7nm CMOS (educational)
+⚙ Analysis Method : Gate-level delay accumulation
+
+── Critical Path ───────────────────────────────
+  DFF Clk-to-Q delay   : 0.1 ns
+  Combinational delay   : 0 ns
+  Setup time            : 0.03 ns
+  ─────────────────────────────────────────────
+  Critical path total   : 0.13 ns
+  Max frequency (est.)  : 7692.31 MHz
+
+── Hold Time ───────────────────────────────────
+  Hold time             : 0.01 ns
+
+── Gate Delay Breakdown ────────────────────────
+
+── Note ────────────────────────────────────────
+  Educational estimate using generic 7nm gate delays. For accurate timing, use OpenSTA with a process-specific Liberty (.lib) file.
+
+  For production-grade timing: add OpenSTA +
+  a Liberty file (.lib) from your target PDK.

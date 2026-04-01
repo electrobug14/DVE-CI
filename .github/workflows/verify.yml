@@ -31,10 +31,11 @@ jobs:
             yosys \
             graphviz \
             python3-pip
-          pip3 install matplotlib --quiet
           curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
           sudo apt-get install -y nodejs
-          sudo npm install -g netlistsvg
+          # netlistsvg → schematic SVG
+          # wavedrom-cli → waveform SVG
+          sudo npm install -g netlistsvg wavedrom-cli
 
       # ─────────────────────────────────────────
       # 3. IDENTIFY WHICH FOLDER CHANGED
@@ -43,7 +44,6 @@ jobs:
         id: get_dir
         run: |
           EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
           if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             BASE="HEAD^"
           else
@@ -59,7 +59,6 @@ jobs:
             echo "❌ No design.v found in this push."
             exit 1
           fi
-
           echo "workdir=$DIR" >> $GITHUB_OUTPUT
           echo "📁 Working directory: $DIR"
 
@@ -71,28 +70,23 @@ jobs:
         run: |
           cd ${{ steps.get_dir.outputs.workdir }}
 
-          iverilog -g2012 \
-            -o sim.vvp \
-            design.v \
-            ../scripts/universal_tb.v \
+          iverilog -g2012 -o sim.vvp \
+            design.v ../scripts/universal_tb.v \
             2>&1 | tee compile_log.txt
           COMPILE_STATUS=${PIPESTATUS[0]}
 
           if [ $COMPILE_STATUS -eq 0 ]; then
             vvp sim.vvp 2>&1 | tee sim_output.txt
-            SIM_STATUS=${PIPESTATUS[0]}
           else
             echo "Compilation failed." > sim_output.txt
-            SIM_STATUS=1
           fi
 
           echo "compile_ok=$([ $COMPILE_STATUS -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "sim_ok=$([ $SIM_STATUS -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       # ─────────────────────────────────────────
-      # 5. WAVEFORM (Python matplotlib — no GTKWave needed)
+      # 5. WAVEFORM — VCD → WaveDrom → SVG
       # ─────────────────────────────────────────
-      - name: Export Waveform PNG
+      - name: Export Waveform SVG (WaveDrom)
         id: waveform
         run: |
           cd ${{ steps.get_dir.outputs.workdir }}
@@ -103,13 +97,13 @@ jobs:
             exit 0
           fi
 
-          python3 ../scripts/vcd_to_png.py \
+          python3 ../scripts/vcd_to_wavedrom.py \
             --vcd dump.vcd \
-            --output waveform.png \
+            --output waveform.svg \
             2>&1
 
-          if [ -f waveform.png ]; then
-            echo "✅ waveform.png generated ($(du -h waveform.png | cut -f1))"
+          if [ -f waveform.svg ]; then
+            echo "✅ waveform.svg generated"
             echo "ok=true" >> $GITHUB_OUTPUT
           else
             echo "ok=false" >> $GITHUB_OUTPUT
@@ -165,15 +159,12 @@ jobs:
       # 8. HARDWARE METRICS
       # ─────────────────────────────────────────
       - name: Extract Hardware Metrics
-        id: metrics
         run: |
           cd ${{ steps.get_dir.outputs.workdir }}
           python3 ../scripts/parse_metrics.py \
             --yosys-log yosys_log.txt \
             --stat-json synth_stats.txt \
-            --output hardware_metrics.json \
-            2>&1
-          echo "ok=$([ -f hardware_metrics.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+            --output hardware_metrics.json 2>&1
 
       # ─────────────────────────────────────────
       # 9. TIMING ANALYSIS
@@ -184,8 +175,7 @@ jobs:
           python3 ../scripts/estimate_timing.py \
             --yosys-log yosys_log.txt \
             --netlist synth_netlist.v \
-            --output timing_report.txt \
-            2>&1
+            --output timing_report.txt 2>&1
 
       # ─────────────────────────────────────────
       # 10. BUILD MARKDOWN REPORT
@@ -204,7 +194,7 @@ jobs:
             --output simulation_log.md
 
       # ─────────────────────────────────────────
-      # 11. COMMIT RESULTS — only stage files that exist
+      # 11. COMMIT — only stage files that exist
       # ─────────────────────────────────────────
       - name: Commit Results to Repository
         run: |
@@ -213,9 +203,9 @@ jobs:
 
           WORKDIR="${{ steps.get_dir.outputs.workdir }}"
 
-          # Stage only files that were actually generated
           for f in \
             "$WORKDIR/simulation_log.md" \
+            "$WORKDIR/waveform.svg" \
             "$WORKDIR/waveform.png" \
             "$WORKDIR/schematic.svg" \
             "$WORKDIR/schematic_gates.svg" \
@@ -223,15 +213,9 @@ jobs:
             "$WORKDIR/hardware_metrics.json" \
             "$WORKDIR/synth_netlist.v"
           do
-            if [ -f "$f" ]; then
-              git add "$f"
-              echo "📎 Staged: $f"
-            else
-              echo "⏭️  Skipped (not found): $f"
-            fi
+            [ -f "$f" ] && git add "$f" && echo "📎 Staged: $f" || echo "⏭️  Skipped: $f"
           done
 
-          # Only commit if something was staged
           if git diff --cached --quiet; then
             echo "✅ Nothing new to commit."
           else
@@ -248,7 +232,7 @@ jobs:
           name: hdl-results-${{ steps.get_dir.outputs.workdir }}
           path: |
             ${{ steps.get_dir.outputs.workdir }}/simulation_log.md
-            ${{ steps.get_dir.outputs.workdir }}/waveform.png
+            ${{ steps.get_dir.outputs.workdir }}/waveform.svg
             ${{ steps.get_dir.outputs.workdir }}/schematic.svg
             ${{ steps.get_dir.outputs.workdir }}/schematic_gates.svg
             ${{ steps.get_dir.outputs.workdir }}/timing_report.txt

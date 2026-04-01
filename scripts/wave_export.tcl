@@ -13,19 +13,8 @@ for {set i 0} {$i < $nfacs} {incr i} {
 
 gtkwave::addSignalsFromList $wl
 
-# ── Signal display formatting ────────────────────────────────
-# Show values as binary (clearest for hardware signals)
-set num_traces [gtkwave::getVisibleNumTraces]
-for {set i 0} {$i < $num_traces} {incr i} {
-    gtkwave::setTraceHighlightFromIndex $i on
-}
-gtkwave::setAllTraceHighlightFromList [gtkwave::getVisibleNumTraces]
-
 # ── Zoom to fit entire simulation timespan ───────────────────
 gtkwave::/Time/Zoom/Zoom_Full
-
-# ── Set window size before capture ──────────────────────────
-gtkwave::setWindowStartTime 0
 
 # ── Export PNG ───────────────────────────────────────────────
 # Format: PNG, Landscape Letter (11" x 8.5")

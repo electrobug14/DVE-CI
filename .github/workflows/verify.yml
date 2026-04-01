@@ -51,10 +51,26 @@ jobs:
       - name: Identify Changed Design Folder
         id: get_dir
         run: |
-          DIR=$(git diff --name-only HEAD^ HEAD \
+          # Git empty-tree SHA — safe base for initial commits with no parent
+          EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+          # If HEAD^ exists (not initial commit), diff against it; else diff from empty tree
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            BASE="HEAD^"
+          else
+            BASE="$EMPTY_TREE"
+          fi
+
+          DIR=$(git diff --name-only "$BASE" HEAD \
             | grep 'design\.v$' \
             | head -n 1 \
-            | xargs dirname)
+            | xargs dirname 2>/dev/null)
+
+          if [ -z "$DIR" ]; then
+            echo "❌ Could not determine working directory — no design.v found in this push."
+            exit 1
+          fi
+
           echo "workdir=$DIR" >> $GITHUB_OUTPUT
           echo "📁 Working directory: $DIR"
 

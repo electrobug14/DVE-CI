@@ -7,16 +7,19 @@
 
 ── Critical Path ───────────────────────────────
   DFF Clk-to-Q delay   : 0.1 ns
-  Combinational delay   : 0 ns
+  Combinational delay   : 0.25 ns
   Setup time            : 0.03 ns
   ─────────────────────────────────────────────
-  Critical path total   : 0.13 ns
-  Max frequency (est.)  : 7692.31 MHz
+  Critical path total   : 0.38 ns
+  Max frequency (est.)  : 2631.58 MHz
 
 ── Hold Time ───────────────────────────────────
   Hold time             : 0.01 ns
 
 ── Gate Delay Breakdown ────────────────────────
+  $_ANDNOT_            x   2  →  delay/gate: 0.05 ns
+  $_OR_                x   2  →  delay/gate: 0.05 ns
+  $_AND_               x   1  →  delay/gate: 0.05 ns
 
 ── Note ────────────────────────────────────────
   Educational estimate using generic 7nm gate delays. For accurate timing, use OpenSTA with a process-specific Liberty (.lib) file.

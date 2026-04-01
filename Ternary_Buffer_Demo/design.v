@@ -24,4 +24,4 @@ module dut (
     end
 
 endmodule
-"// retrigger2" 
+// retrigger2

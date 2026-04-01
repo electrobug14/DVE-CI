@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-build_report.py — Assembles simulation_log.md with inline SVG/PNG.
+build_report.py — Assembles simulation_log.md.
 
-GitHub renders images in .md files via relative paths ONLY when the
-image file is committed into the same repo folder. SVG files render
-natively; PNG needs to be committed too.
+Images are referenced by relative path (same directory).
+GitHub renders committed SVG/PNG via relative markdown links.
+Waveform is now SVG from WaveDrom (falls back to PNG if SVG missing).
 """
 
 import argparse
-import base64
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,26 +30,49 @@ def load_json(path: str) -> dict:
     return {}
 
 
-def embed_png_as_base64(png_path: str) -> str:
-    """Embed PNG as base64 data URI so it renders in GitHub Markdown."""
-    p = Path(png_path)
-    if p.exists():
-        data = base64.b64encode(p.read_bytes()).decode()
-        return f'<img src="data:image/png;base64,{data}" alt="Waveform" width="100%"/>'
-    return "_Waveform image not available._"
+def image_link(path: str, alt: str) -> str:
+    """
+    Relative markdown image link — works on GitHub when file is committed
+    to the same directory as simulation_log.md.
+    """
+    return f"![{alt}]({path})"
 
 
-def embed_svg_inline(svg_path: str) -> str:
-    """
-    For SVG: GitHub Markdown does NOT render <img src="x.svg"> from repo.
-    We use a relative markdown image link — this works when the SVG is
-    committed to the same directory and viewed on github.com.
-    """
-    p = Path(svg_path)
-    if p.exists():
-        name = p.name
-        return f'![Schematic]({name})\n\n> *Click to open full schematic. File: `{name}`*'
-    return "_Schematic not available._"
+def build_waveform_section() -> str:
+    # Prefer WaveDrom SVG, fallback to PNG
+    if Path("waveform.svg").exists():
+        return (
+            "### Signal Waveform\n\n"
+            + image_link("waveform.svg", "Waveform")
+            + "\n\n> *Rendered by WaveDrom · "
+              "Click image to open full view*\n"
+        )
+    elif Path("waveform.png").exists():
+        return (
+            "### Signal Waveform\n\n"
+            + image_link("waveform.png", "Waveform")
+            + "\n"
+        )
+    return "> ⚠️ Waveform export was skipped or failed.\n"
+
+
+def build_schematic_section() -> str:
+    out = ""
+    if Path("schematic.svg").exists():
+        out += (
+            "### Gate-Level Schematic (netlistsvg)\n\n"
+            + image_link("schematic.svg", "Schematic")
+            + "\n\n> *Click to open full schematic.*\n"
+        )
+    if Path("schematic_gates.svg").exists():
+        out += (
+            "\n### Yosys Gate Diagram\n\n"
+            + image_link("schematic_gates.svg", "Gate Diagram")
+            + "\n\n> *Click to open full gate diagram.*\n"
+        )
+    if not out:
+        out = "> ⚠️ Schematic generation skipped.\n"
+    return out
 
 
 def build_metrics_table(metrics: dict) -> str:
@@ -102,43 +124,34 @@ def build_report(
     compile_log: str,
     metrics: dict,
     timing_text: str,
-    has_waveform: bool,
-    has_schematic: bool,
 ) -> str:
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    metrics_section = build_metrics_table(metrics)
 
-    # Waveform — embed as base64 PNG so it renders even without clicking
-    if has_waveform and Path("waveform.png").exists():
-        waveform_section = (
-            "### Signal Waveform\n\n"
-            + embed_png_as_base64("waveform.png")
-            + "\n"
-        )
-    else:
-        waveform_section = "> ⚠️ Waveform export was skipped or failed.\n"
+    waveform_section  = build_waveform_section()
+    schematic_section = build_schematic_section()
+    metrics_section   = build_metrics_table(metrics)
 
-    # Schematic — relative path link (works on github.com when file is committed)
-    if has_schematic and Path("schematic.svg").exists():
-        schematic_section = (
-            "### Gate-Level Schematic (netlistsvg)\n\n"
-            + embed_svg_inline("schematic.svg")
-            + "\n"
-        )
-        if Path("schematic_gates.svg").exists():
-            schematic_section += (
-                "\n### Yosys Gate Diagram\n\n"
-                + embed_svg_inline("schematic_gates.svg")
-                + "\n"
-            )
-    else:
-        schematic_section = "> ⚠️ Schematic generation skipped.\n"
+    # Artifacts table — only list files that actually exist
+    artifact_rows = [
+        ("simulation_log.md",    "This report"),
+        ("waveform.svg",         "WaveDrom timing diagram (SVG)"),
+        ("waveform.png",         "Timing diagram (PNG fallback)"),
+        ("schematic.svg",        "Gate-level schematic (netlistsvg)"),
+        ("schematic_gates.svg",  "Yosys gate diagram"),
+        ("timing_report.txt",    "Timing analysis / critical path"),
+        ("hardware_metrics.json","Structured metrics (JSON)"),
+        ("synth_netlist.v",      "Post-synthesis Verilog netlist"),
+    ]
+    artifact_table = "| File | Description |\n|------|-------------|\n"
+    for fname, desc in artifact_rows:
+        if Path(fname).exists():
+            artifact_table += f"| [`{fname}`]({fname}) | {desc} |\n"
 
     report = f"""# 📊 EDA Report: `{project}`
 
 > **Generated:** {now}
-> **Toolchain:** Icarus Verilog · GTKWave · Yosys · Netlistsvg
+> **Toolchain:** Icarus Verilog · WaveDrom · Yosys · Netlistsvg
 > **Pipeline:** GitHub Actions — HDL Ecosystem
 
 ---
@@ -187,15 +200,7 @@ def build_report(
 
 ## 7. Generated Files
 
-| File | Description |
-|------|-------------|
-| `simulation_log.md` | This report |
-| `waveform.png` | GTKWave timing diagram |
-| `schematic.svg` | Gate-level schematic (netlistsvg) |
-| `schematic_gates.svg` | Yosys gate diagram |
-| `timing_report.txt` | Timing analysis / critical path |
-| `hardware_metrics.json` | Structured metrics (JSON) |
-| `synth_netlist.v` | Post-synthesis Verilog netlist |
+{artifact_table}
 
 ---
 
@@ -217,13 +222,11 @@ def main():
     args = parser.parse_args()
 
     report = build_report(
-        project       = args.project,
-        sim_output    = load_text(args.sim_output),
-        compile_log   = load_text(args.compile_log),
-        metrics       = load_json(args.metrics),
-        timing_text   = load_text(args.timing),
-        has_waveform  = args.has_waveform.lower() == "true",
-        has_schematic = args.has_schematic.lower() == "true",
+        project     = args.project,
+        sim_output  = load_text(args.sim_output),
+        compile_log = load_text(args.compile_log),
+        metrics     = load_json(args.metrics),
+        timing_text = load_text(args.timing),
     )
 
     Path(args.output).write_text(report)
